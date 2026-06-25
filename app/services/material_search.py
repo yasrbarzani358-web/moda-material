@@ -1,0 +1,63 @@
+import asyncio
+import hashlib
+import logging
+from collections.abc import Iterable
+
+from rapidfuzz import fuzz
+
+from app.core.config import settings
+from app.services.ai import AIConsultant
+from app.services.schemas import MaterialIntent, MaterialResult
+from app.sources.base import MaterialSource
+
+LOGGER = logging.getLogger(__name__)
+
+
+class MaterialSearchService:
+    def __init__(self, sources: Iterable[MaterialSource], consultant: AIConsultant) -> None:
+        self.sources = list(sources)
+        self.consultant = consultant
+        self.cache: dict[str, MaterialResult] = {}
+
+    async def search(self, text: str, usage: str | None = None) -> tuple[MaterialIntent, list[MaterialResult], str]:
+        intent = await self.consultant.parse_intent(text, usage=usage)
+        batches = await asyncio.gather(
+            *(self._safe_source_search(source, intent) for source in self.sources),
+            return_exceptions=False,
+        )
+        flattened = [result for batch in batches for result in batch]
+        ranked = self._dedupe_and_rank(flattened, intent)[: settings.max_results_per_source * 2]
+        for result in ranked:
+            self.cache[self.short_id(result.key)] = result
+        note = self.consultant.consultant_note(intent, len(ranked))
+        return intent, ranked, note
+
+    async def _safe_source_search(self, source: MaterialSource, intent: MaterialIntent) -> list[MaterialResult]:
+        try:
+            return await source.search(intent)
+        except Exception as exc:
+            LOGGER.warning("%s search failed: %s", source.name, exc)
+            return [source.fallback_result(intent)]
+
+    def _dedupe_and_rank(self, results: list[MaterialResult], intent: MaterialIntent) -> list[MaterialResult]:
+        deduped: dict[str, MaterialResult] = {}
+        query = intent.search_query.lower()
+        for result in results:
+            normalized = result.name.lower().replace("-", " ").replace("_", " ")
+            duplicate_key = f"{result.source}:{normalized}"
+            match_score = fuzz.token_set_ratio(query, normalized) / 100
+            usage_bonus = 0.08 if intent.usage and intent.usage in result.recommended_usage else 0
+            result.score = max(result.score, match_score) + usage_bonus
+            if duplicate_key not in deduped or result.score > deduped[duplicate_key].score:
+                deduped[duplicate_key] = result
+        return sorted(deduped.values(), key=lambda item: item.score, reverse=True)
+
+    def get_cached(self, key: str) -> MaterialResult | None:
+        return self.cache.get(key)
+
+    @staticmethod
+    def short_id(key: str) -> str:
+        return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
+    async def aclose(self) -> None:
+        await asyncio.gather(*(source.aclose() for source in self.sources), return_exceptions=True)
