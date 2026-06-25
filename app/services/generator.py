@@ -1,9 +1,11 @@
+import io
 import math
 import random
 import re
 import zipfile
 from pathlib import Path
 
+import httpx
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from app.core.config import settings
@@ -23,7 +25,7 @@ class MaterialGenerator:
 
         seed = abs(hash((prompt, user_id))) % (2**32)
         random.seed(seed)
-        albedo = self._albedo(prompt)
+        albedo = await self._albedo(prompt)
         roughness = self._roughness(albedo)
         height = self._height(albedo)
         normal = self._normal_from_height(height)
@@ -42,17 +44,25 @@ class MaterialGenerator:
         height.save(maps["height"])
         ao.save(maps["ambient_occlusion"])
 
-        archive = output_dir / "material_maps.zip"
+        archive = output_dir / f"{slug}_pbr_maps.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for name, path in maps.items():
                 zf.write(path, arcname=f"{name}.png")
 
         maps["zip"] = str(archive)
-        notes = (
-            "Generated procedural PBR starter maps. For production renders, inspect seams and tune scale, "
-            "roughness, and displacement strength in your renderer."
-        )
+        notes = self._notes()
         return GeneratedMaterialPackage(prompt=prompt, directory=str(output_dir), maps=maps, notes=notes)
+
+    def _notes(self) -> str:
+        if settings.ai_image_api_url and settings.ai_image_api_key:
+            return (
+                "Generated with your connected AI image API, then converted into starter PBR maps. "
+                "For production renders, inspect tileability and tune normal/displacement strength."
+            )
+        return (
+            "Generated local procedural PBR starter maps from your prompt. To use real AI images, connect "
+            "AI_IMAGE_API_URL and AI_IMAGE_API_KEY. For production renders, inspect seams and tune scale."
+        )
 
     def _palette(self, prompt: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
         lowered = prompt.lower()
@@ -69,7 +79,35 @@ class MaterialGenerator:
         accent = (196, 151, 61) if "gold" in lowered else tuple(min(255, channel + 35) for channel in base)
         return base, accent
 
-    def _albedo(self, prompt: str, size: int = 1024) -> Image.Image:
+    async def _albedo(self, prompt: str, size: int = 1024) -> Image.Image:
+        ai_image = await self._try_ai_image(prompt, size)
+        if ai_image:
+            return ai_image
+        return self._procedural_albedo(prompt, size)
+
+    async def _try_ai_image(self, prompt: str, size: int) -> Image.Image | None:
+        if not settings.ai_image_api_url or not settings.ai_image_api_key:
+            return None
+        material_prompt = (
+            "seamless square PBR material texture, no objects, no perspective, no shadows, "
+            f"top down flat surface, {prompt}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(
+                    settings.ai_image_api_url,
+                    headers={
+                        "Authorization": f"Bearer {settings.ai_image_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"prompt": material_prompt},
+                )
+                response.raise_for_status()
+            return Image.open(io.BytesIO(response.content)).convert("RGB").resize((size, size))
+        except Exception:
+            return None
+
+    def _procedural_albedo(self, prompt: str, size: int = 1024) -> Image.Image:
         base, accent = self._palette(prompt)
         img = Image.new("RGB", (size, size), base)
         draw = ImageDraw.Draw(img)

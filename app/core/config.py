@@ -17,9 +17,12 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", validation_alias="OPENAI_MODEL")
     enable_ai_generation: bool = Field(default=False, validation_alias="ENABLE_AI_GENERATION")
+    ai_image_api_url: str | None = Field(default=None, validation_alias="AI_IMAGE_API_URL")
+    ai_image_api_key: str | None = Field(default=None, validation_alias="AI_IMAGE_API_KEY")
     public_base_url: str | None = Field(default=None, validation_alias="PUBLIC_BASE_URL")
     request_timeout_seconds: float = Field(default=15, validation_alias="REQUEST_TIMEOUT_SECONDS")
     max_results_per_source: int = Field(default=5, validation_alias="MAX_RESULTS_PER_SOURCE")
+    max_bot_download_mb: int = Field(default=45, validation_alias="MAX_BOT_DOWNLOAD_MB")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     generated_dir: Path = Path("generated")
 

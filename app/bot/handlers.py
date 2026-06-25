@@ -17,6 +17,7 @@ from telegram.ext import (
 from app.core.config import settings
 from app.core.keyboards import CHANNEL_KEYBOARD, MAIN_MENU, USAGE_MENU, download_quality_keyboard, result_keyboard
 from app.db.session import SessionLocal
+from app.services.downloader import DownloadTooLargeError, MaterialDownloader
 from app.services.generator import MaterialGenerator
 from app.services.image_similarity import ImageMaterialAnalyzer
 from app.services.material_search import MaterialSearchService
@@ -217,21 +218,28 @@ async def _generate_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if not user:
         return
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
-    package = await generator.generate(prompt, user.id)
-    await stats.event(user.id, "generate", {"prompt": prompt})
-    await message.reply_photo(
-        photo=InputFile(package.maps["albedo"]),
-        caption="Preview: generated albedo/base-color map.",
-    )
-    await message.reply_document(
-        document=InputFile(package.maps["zip"]),
-        filename=Path(package.maps["zip"]).name,
-        caption=(
-            f"Generated PBR map package for: {prompt}\n\n"
-            "Includes albedo, normal, roughness, height, and ambient occlusion.\n\n"
-            f"{package.notes}"
-        ),
-    )
+    try:
+        package = await generator.generate(prompt, user.id)
+        await stats.event(user.id, "generate", {"prompt": prompt})
+        await message.reply_photo(
+            photo=InputFile(package.maps["albedo"]),
+            caption="Preview: generated albedo/base-color map.",
+        )
+        await message.reply_document(
+            document=InputFile(package.maps["zip"]),
+            filename=Path(package.maps["zip"]).name,
+            caption=(
+                f"Generated PBR map package for: {prompt}\n\n"
+                "Includes albedo, normal, roughness, height, and ambient occlusion.\n\n"
+                f"{package.notes}"
+            ),
+        )
+    except Exception:
+        LOGGER.exception("Material generation failed")
+        await message.reply_text(
+            "I could not generate the material package on this server. "
+            "Please try a shorter prompt, or try again in a moment."
+        )
 
 
 async def _search_and_render(
@@ -250,10 +258,15 @@ async def _search_and_render(
     await stats.event(user_id, "search", {"query": text, "intent": intent.search_query})
     await message.reply_text(note)
     for material in results[:4]:
-        await _send_material_card(message, search_service, material)
+        await _send_material_card(message, context, search_service, material)
 
 
-async def _send_material_card(message, search_service: MaterialSearchService, material: MaterialResult) -> None:
+async def _send_material_card(
+    message,
+    context: ContextTypes.DEFAULT_TYPE,
+    search_service: MaterialSearchService,
+    material: MaterialResult,
+) -> None:
     short_id = search_service.short_id(material.key)
     caption = (
         f"*{_escape(material.name)}*\n"
@@ -265,14 +278,16 @@ async def _send_material_card(message, search_service: MaterialSearchService, ma
     keyboard = result_keyboard(short_id, material.download_url or material.page_url, material.has_direct_downloads)
     if material.preview_url:
         try:
+            downloader: MaterialDownloader = context.application.bot_data["downloader"]
+            preview_path = await downloader.fetch_preview(material.preview_url, f"{short_id}_preview.jpg")
             await message.reply_photo(
-                photo=material.preview_url,
+                photo=InputFile(preview_path),
                 caption=caption,
                 parse_mode=ParseMode.MARKDOWN_V2,
                 reply_markup=keyboard,
             )
             return
-        except TelegramError:
+        except Exception:
             LOGGER.info("Preview failed for %s; sending text card", material.key)
     await message.reply_text(caption, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=keyboard)
 
@@ -307,15 +322,30 @@ async def send_material_download(
 
     message = update.effective_message
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
+    downloader: MaterialDownloader = context.application.bot_data["downloader"]
+    filename = f"{material.name.replace(' ', '_')}_{quality}.zip"
     try:
+        local_zip = await downloader.fetch_zip(download_url, filename)
         await message.reply_document(
-            document=download_url,
-            filename=f"{material.name.replace(' ', '_')}_{quality}.zip",
+            document=InputFile(local_zip),
+            filename=local_zip.name,
             caption=f"{material.name}\nQuality: {quality}\nSource: {material.source}",
         )
-    except TelegramError:
+    except DownloadTooLargeError:
         await message.reply_text(
-            "Telegram could not upload this ZIP directly, usually because the file is too large. "
+            f"This {quality} ZIP is too large for the free bot server to upload directly. "
+            "Try 1K or 2K, or use the source download page."
+        )
+    except TelegramError:
+        LOGGER.exception("Telegram upload failed for %s", material.key)
+        await message.reply_text(
+            "Telegram could not upload this ZIP directly. "
+            f"Try a lower quality, or use this direct link:\n{download_url}"
+        )
+    except Exception:
+        LOGGER.exception("Download failed for %s", material.key)
+        await message.reply_text(
+            "I could not fetch this material ZIP from the source right now. "
             f"Use this direct download link:\n{download_url}"
         )
 

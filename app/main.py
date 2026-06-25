@@ -6,6 +6,7 @@ from app.bot.handlers import register_handlers
 from app.core.config import settings
 from app.db.session import create_schema
 from app.services.ai import AIConsultant
+from app.services.downloader import MaterialDownloader
 from app.services.generator import MaterialGenerator
 from app.services.image_similarity import ImageMaterialAnalyzer
 from app.services.material_search import MaterialSearchService
@@ -46,6 +47,7 @@ def build_application() -> Application:
     search_service = MaterialSearchService(sources=sources, consultant=consultant)
     generator = MaterialGenerator(consultant=consultant)
     image_analyzer = ImageMaterialAnalyzer()
+    downloader = MaterialDownloader()
     stats = StatsService()
 
     application = (
@@ -61,6 +63,7 @@ def build_application() -> Application:
             "search_service": search_service,
             "generator": generator,
             "image_analyzer": image_analyzer,
+            "downloader": downloader,
             "stats": stats,
         }
     )
