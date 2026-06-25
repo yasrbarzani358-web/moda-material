@@ -1,0 +1,15 @@
+services:
+  - type: worker
+    name: ai-material-assistant
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.main
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:///./data/ai_material_assistant.db
+      - key: ENABLE_AI_GENERATION
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
