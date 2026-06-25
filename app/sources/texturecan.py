@@ -33,6 +33,7 @@ class TextureCanSource(MaterialSource):
                     preview_url=None,
                     page_url=page_url,
                     download_url=page_url,
+                    downloads={},
                     similar=[],
                     score=0.65,
                 )

@@ -31,6 +31,7 @@ class PolyHavenSource(MaterialSource):
                     preview_url=f"https://cdn.polyhaven.com/asset_img/primary/{slug}.png?height=256",
                     page_url=page_url,
                     download_url=page_url,
+                    downloads={},
                     similar=[],
                     score=0.85,
                 )

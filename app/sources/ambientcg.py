@@ -21,6 +21,10 @@ class AmbientCGSource(MaterialSource):
             category = item.get("category") or intent.material_type or "material"
             page_url = f"{self.base_url}/view?id={asset_id}"
             preview = f"https://ambientcg.com/get?file={asset_id}_Preview.jpg"
+            downloads = {
+                quality: f"https://ambientcg.com/get?file={asset_id}_{quality}-JPG.zip"
+                for quality in ["1K", "2K", "4K", "8K"]
+            }
             results.append(
                 MaterialResult(
                     key=f"ambientcg:{asset_id}",
@@ -32,8 +36,9 @@ class AmbientCGSource(MaterialSource):
                     preview_url=preview,
                     page_url=page_url,
                     download_url=page_url,
+                    downloads=downloads,
                     similar=[],
-                    score=0.9,
+                    score=1.0,
                 )
             )
         return results or [self.fallback_result(intent)]

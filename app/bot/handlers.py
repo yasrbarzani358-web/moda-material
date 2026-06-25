@@ -15,9 +15,10 @@ from telegram.ext import (
 )
 
 from app.core.config import settings
-from app.core.keyboards import MAIN_MENU, USAGE_MENU, result_keyboard
+from app.core.keyboards import CHANNEL_KEYBOARD, MAIN_MENU, USAGE_MENU, download_quality_keyboard, result_keyboard
 from app.db.session import SessionLocal
 from app.services.generator import MaterialGenerator
+from app.services.image_similarity import ImageMaterialAnalyzer
 from app.services.material_search import MaterialSearchService
 from app.services.repository import Repository
 from app.services.schemas import MaterialResult
@@ -25,15 +26,22 @@ from app.services.stats import StatsService
 
 LOGGER = logging.getLogger(__name__)
 
-WAITING_MATERIAL_NAME, WAITING_DESCRIPTION, WAITING_GENERATION, WAITING_BROADCAST = range(4)
+(
+    WAITING_MATERIAL_NAME,
+    WAITING_DESCRIPTION,
+    WAITING_GENERATION,
+    WAITING_BROADCAST,
+    WAITING_SIMILAR_IMAGE,
+) = range(5)
 
 
 def register_handlers(application: Application) -> None:
     conversation = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex("^🔍 Material Name$"), ask_material_name),
-            MessageHandler(filters.Regex("^📝 Describe Material$"), ask_description),
-            MessageHandler(filters.Regex("^🎨 Generate Material with AI$"), ask_generation),
+            MessageHandler(filters.Regex("^Material Name$"), ask_material_name),
+            MessageHandler(filters.Regex("^Describe Material$"), ask_description),
+            MessageHandler(filters.Regex("^Generate Material with AI$"), ask_generation),
+            MessageHandler(filters.Regex("^Find Similar by Image$"), ask_similar_image),
             CommandHandler("broadcast", ask_broadcast),
         ],
         states={
@@ -41,6 +49,7 @@ def register_handlers(application: Application) -> None:
             WAITING_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description)],
             WAITING_GENERATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_generation)],
             WAITING_BROADCAST: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast)],
+            WAITING_SIMILAR_IMAGE: [MessageHandler(filters.PHOTO, handle_similar_image)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
@@ -49,9 +58,10 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(conversation)
-    application.add_handler(MessageHandler(filters.Regex("^🏠 Material Usage$"), usage_menu))
-    application.add_handler(MessageHandler(filters.Regex("^⭐ Favorites$"), favorites))
-    application.add_handler(MessageHandler(filters.Regex("^❓ Help$"), help_command))
+    application.add_handler(MessageHandler(filters.Regex("^Material Usage$"), usage_menu))
+    application.add_handler(MessageHandler(filters.Regex("^Telegram Channel$"), channel))
+    application.add_handler(MessageHandler(filters.Regex("^Favorites$"), favorites))
+    application.add_handler(MessageHandler(filters.Regex("^Help$"), help_command))
     application.add_handler(CallbackQueryHandler(callback_router))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_free_text))
 
@@ -67,13 +77,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _touch(update, context)
     await update.effective_message.reply_text(
-        "Send a material name, describe a surface, choose an application, or ask for AI generation.\n\n"
+        "Send a material name, describe a surface, choose an application, upload a reference image, "
+        "or generate a procedural PBR material.\n\n"
         "Examples:\n"
-        "• Walnut wood\n"
-        "• Dark concrete with small golden particles\n"
-        "• Concrete for brutalist facade\n"
-        "• I need a luxury hotel lobby floor",
+        "- Walnut wood\n"
+        "- Dark concrete with small golden particles\n"
+        "- Concrete for brutalist facade\n"
+        "- I need a luxury hotel lobby floor",
         reply_markup=MAIN_MENU,
+    )
+
+
+async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(
+        "Join the Yasr Designs Telegram channel:",
+        reply_markup=CHANNEL_KEYBOARD,
     )
 
 
@@ -88,8 +106,17 @@ async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def ask_generation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.effective_message.reply_text("Describe the material to generate, for example: Burned dark oak with gold veins.")
+    await update.effective_message.reply_text(
+        "Describe the material to generate, for example: Burned dark oak with gold veins."
+    )
     return WAITING_GENERATION
+
+
+async def ask_similar_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.effective_message.reply_text(
+        "Upload a clear material photo or render. I will find similar downloadable PBR materials."
+    )
+    return WAITING_SIMILAR_IMAGE
 
 
 async def usage_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -104,6 +131,33 @@ async def handle_material_name(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _search_and_render(update, context, update.effective_message.text)
+    return ConversationHandler.END
+
+
+async def handle_generation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _generate_and_send(update, context, update.effective_message.text)
+    return ConversationHandler.END
+
+
+async def handle_similar_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message.photo:
+        await message.reply_text("Please upload a material image.")
+        return WAITING_SIMILAR_IMAGE
+
+    await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
+    photo = message.photo[-1]
+    file = await photo.get_file()
+    image_dir = Path("generated") / "image-search"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    image_path = image_dir / f"{user.id}-{photo.file_unique_id}.jpg"
+    await file.download_to_drive(custom_path=image_path)
+
+    analyzer: ImageMaterialAnalyzer = context.application.bot_data["image_analyzer"]
+    query = analyzer.analyze(image_path)
+    await message.reply_text(f"I analyzed the image as: {query}\nSearching similar materials now.")
+    await _search_and_render(update, context, query)
     return ConversationHandler.END
 
 
@@ -125,26 +179,24 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await more_like_this(update, context, data.split(":", 1)[1])
     elif data.startswith("variant:"):
         await variant_prompt(update, context, data.split(":", 1)[1])
+    elif data.startswith("dlopts:"):
+        await show_download_options(update, context, data.split(":", 1)[1])
+    elif data.startswith("dl:"):
+        _, material_id, quality = data.split(":", 2)
+        await send_material_download(update, context, material_id, quality)
 
 
 async def handle_usage(update: Update, context: ContextTypes.DEFAULT_TYPE, usage: str) -> None:
     message = update.effective_message
-    search_service: MaterialSearchService = context.application.bot_data["search_service"]
     consultant = context.application.bot_data["consultant"]
     recommendations = consultant.recommendations_for_usage(usage)
     await message.reply_text(
         f"For {usage}, I recommend: {', '.join(recommendations[:5])}.\n\n"
-        "I’ll also search free PBR sources for suitable options."
+        "I will search free PBR sources for suitable options."
     )
     await _search_and_render(update, context, " ".join(recommendations[:3]), usage=usage)
     user_id = update.effective_user.id if update.effective_user else None
     await context.application.bot_data["stats"].event(user_id, "usage", {"usage": usage})
-    _ = search_service
-
-
-async def handle_generation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await _generate_and_send(update, context, update.effective_message.text)
-    return ConversationHandler.END
 
 
 async def variant_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, material_id: str) -> None:
@@ -167,10 +219,18 @@ async def _generate_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE,
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
     package = await generator.generate(prompt, user.id)
     await stats.event(user.id, "generate", {"prompt": prompt})
+    await message.reply_photo(
+        photo=InputFile(package.maps["albedo"]),
+        caption="Preview: generated albedo/base-color map.",
+    )
     await message.reply_document(
         document=InputFile(package.maps["zip"]),
         filename=Path(package.maps["zip"]).name,
-        caption=f"Generated PBR maps for: {prompt}\n\n{package.notes}",
+        caption=(
+            f"Generated PBR map package for: {prompt}\n\n"
+            "Includes albedo, normal, roughness, height, and ambient occlusion.\n\n"
+            f"{package.notes}"
+        ),
     )
 
 
@@ -189,7 +249,7 @@ async def _search_and_render(
     intent, results, note = await search_service.search(text, usage=usage)
     await stats.event(user_id, "search", {"query": text, "intent": intent.search_query})
     await message.reply_text(note)
-    for material in results[:6]:
+    for material in results[:4]:
         await _send_material_card(message, search_service, material)
 
 
@@ -200,10 +260,9 @@ async def _send_material_card(message, search_service: MaterialSearchService, ma
         f"Source: {_escape(material.source)}\n"
         f"Category: {_escape(material.category)}\n"
         f"Recommended usage: {_escape(', '.join(material.recommended_usage))}\n"
-        f"Resolution: {_escape(material.resolution or 'varies')}\n"
-        f"[Open material]({material.page_url})"
+        f"Resolution: {_escape(material.resolution or 'varies')}"
     )
-    keyboard = result_keyboard(short_id, material.download_url or material.page_url)
+    keyboard = result_keyboard(short_id, material.download_url or material.page_url, material.has_direct_downloads)
     if material.preview_url:
         try:
             await message.reply_photo(
@@ -216,6 +275,49 @@ async def _send_material_card(message, search_service: MaterialSearchService, ma
         except TelegramError:
             LOGGER.info("Preview failed for %s; sending text card", material.key)
     await message.reply_text(caption, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=keyboard)
+
+
+async def show_download_options(update: Update, context: ContextTypes.DEFAULT_TYPE, material_id: str) -> None:
+    search_service: MaterialSearchService = context.application.bot_data["search_service"]
+    material = search_service.get_cached(material_id)
+    if not material or not material.downloads:
+        await update.effective_message.reply_text("No direct ZIP downloads are available for this material.")
+        return
+    await update.effective_message.reply_text(
+        f"Choose download quality for {material.name}:",
+        reply_markup=download_quality_keyboard(material_id, material.downloads),
+    )
+
+
+async def send_material_download(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    material_id: str,
+    quality: str,
+) -> None:
+    search_service: MaterialSearchService = context.application.bot_data["search_service"]
+    material = search_service.get_cached(material_id)
+    if not material:
+        await update.effective_message.reply_text("That result expired. Search again and download from the new card.")
+        return
+    download_url = material.downloads.get(quality)
+    if not download_url:
+        await update.effective_message.reply_text("That quality is not available for this material.")
+        return
+
+    message = update.effective_message
+    await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
+    try:
+        await message.reply_document(
+            document=download_url,
+            filename=f"{material.name.replace(' ', '_')}_{quality}.zip",
+            caption=f"{material.name}\nQuality: {quality}\nSource: {material.source}",
+        )
+    except TelegramError:
+        await message.reply_text(
+            "Telegram could not upload this ZIP directly, usually because the file is too large. "
+            f"Use this direct download link:\n{download_url}"
+        )
 
 
 async def save_material(update: Update, context: ContextTypes.DEFAULT_TYPE, material_id: str) -> None:
@@ -244,7 +346,7 @@ async def favorites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines = ["Your saved materials:"]
     for item in items:
         url = item.download_url or "#"
-        lines.append(f"• {item.material_name} ({item.source})\n{url}")
+        lines.append(f"- {item.material_name} ({item.source})\n{url}")
     await update.effective_message.reply_text("\n\n".join(lines))
 
 

@@ -27,6 +27,9 @@ MATERIAL_TYPES = [
     "limestone",
     "travertine",
     "granite",
+    "mosaic",
+    "ceramic",
+    "carpet",
 ]
 COLORS = [
     "white",
@@ -44,7 +47,7 @@ COLORS = [
     "beige",
     "cream",
 ]
-FINISHES = ["polished", "matte", "rough", "brushed", "glossy", "burned", "aged", "raw", "exposed"]
+FINISHES = ["polished", "matte", "rough", "brushed", "glossy", "burned", "aged", "raw", "exposed", "satin", "honed"]
 STYLES = ["minimalist", "industrial", "scandinavian", "brutalist", "contemporary", "luxury", "rustic"]
 USAGES = ["floor", "wall", "roof", "door", "ceiling", "furniture", "exterior", "interior", "facade"]
 
@@ -107,9 +110,13 @@ class AIConsultant:
 
         properties = [
             word
-            for word in ["veined", "grain", "speckled", "porous", "smooth", "seamless", "weathered"]
+            for word in ["veined", "grain", "speckled", "porous", "smooth", "seamless", "weathered", "particles", "flecks"]
             if word in lowered
         ]
+        if "golden particles" in lowered or "gold particles" in lowered:
+            properties.extend(["gold", "speckled"])
+        if "veins" in lowered and "veined" not in properties:
+            properties.append("veined")
         return MaterialIntent(
             raw_text=text,
             material_type=first_match(MATERIAL_TYPES),

@@ -26,7 +26,7 @@ class MaterialSearchService:
             return_exceptions=False,
         )
         flattened = [result for batch in batches for result in batch]
-        ranked = self._dedupe_and_rank(flattened, intent)[: settings.max_results_per_source * 2]
+        ranked = self._dedupe_and_rank(flattened, intent)[:6]
         for result in ranked:
             self.cache[self.short_id(result.key)] = result
         note = self.consultant.consultant_note(intent, len(ranked))
@@ -42,12 +42,23 @@ class MaterialSearchService:
     def _dedupe_and_rank(self, results: list[MaterialResult], intent: MaterialIntent) -> list[MaterialResult]:
         deduped: dict[str, MaterialResult] = {}
         query = intent.search_query.lower()
+        query_tokens = {token for token in query.split() if len(token) > 2}
         for result in results:
-            normalized = result.name.lower().replace("-", " ").replace("_", " ")
-            duplicate_key = f"{result.source}:{normalized}"
+            normalized = " ".join(
+                f"{result.name} {result.category} {' '.join(result.recommended_usage)}"
+                .lower()
+                .replace("-", " ")
+                .replace("_", " ")
+                .split()
+            )
+            duplicate_key = normalized
             match_score = fuzz.token_set_ratio(query, normalized) / 100
+            exact_bonus = 0.25 if query_tokens and query_tokens.issubset(set(normalized.split())) else 0
             usage_bonus = 0.08 if intent.usage and intent.usage in result.recommended_usage else 0
-            result.score = max(result.score, match_score) + usage_bonus
+            direct_bonus = 0.2 if result.has_direct_downloads else 0
+            preview_bonus = 0.05 if result.preview_url else 0
+            fallback_penalty = -0.25 if result.name.endswith(f" on {result.source}") else 0
+            result.score = max(result.score, match_score) + exact_bonus + usage_bonus + direct_bonus + preview_bonus + fallback_penalty
             if duplicate_key not in deduped or result.score > deduped[duplicate_key].score:
                 deduped[duplicate_key] = result
         return sorted(deduped.values(), key=lambda item: item.score, reverse=True)

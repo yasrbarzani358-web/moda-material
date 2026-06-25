@@ -2,9 +2,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
-        ["🔍 Material Name", "📝 Describe Material"],
-        ["🏠 Material Usage", "🎨 Generate Material with AI"],
-        ["⭐ Favorites", "❓ Help"],
+        ["Material Name", "Describe Material"],
+        ["Material Usage", "Find Similar by Image"],
+        ["Generate Material with AI", "Telegram Channel"],
+        ["Favorites", "Help"],
     ],
     resize_keyboard=True,
 )
@@ -29,16 +30,30 @@ USAGE_MENU = InlineKeyboardMarkup(
     ]
 )
 
+CHANNEL_KEYBOARD = InlineKeyboardMarkup(
+    [[InlineKeyboardButton("Open Telegram Channel", url="https://t.me/yasrdesigns")]]
+)
 
-def result_keyboard(material_id: str, download_url: str | None) -> InlineKeyboardMarkup:
+
+def result_keyboard(material_id: str, download_url: str | None, has_direct_downloads: bool = False) -> InlineKeyboardMarkup:
     buttons = []
-    if download_url:
-        buttons.append([InlineKeyboardButton("Download", url=download_url)])
+    if has_direct_downloads:
+        buttons.append([InlineKeyboardButton("Download PBR Maps", callback_data=f"dlopts:{material_id}")])
+    elif download_url:
+        buttons.append([InlineKeyboardButton("Open Download Page", url=download_url)])
     buttons.append(
         [
-            InlineKeyboardButton("More Like This", callback_data=f"more:{material_id}"),
+            InlineKeyboardButton("Find Similar", callback_data=f"more:{material_id}"),
             InlineKeyboardButton("Save", callback_data=f"save:{material_id}"),
         ]
     )
     buttons.append([InlineKeyboardButton("Generate Variant", callback_data=f"variant:{material_id}")])
     return InlineKeyboardMarkup(buttons)
+
+
+def download_quality_keyboard(material_id: str, downloads: dict[str, str]) -> InlineKeyboardMarkup:
+    order = {"1K": 1, "2K": 2, "4K": 4, "8K": 8, "SOURCE": 99}
+    rows = []
+    for quality in sorted(downloads.keys(), key=lambda item: order.get(item, 100)):
+        rows.append([InlineKeyboardButton(f"{quality} ZIP", callback_data=f"dl:{material_id}:{quality}")])
+    return InlineKeyboardMarkup(rows)

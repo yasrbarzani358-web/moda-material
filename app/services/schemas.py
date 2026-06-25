@@ -36,8 +36,13 @@ class MaterialResult:
     preview_url: str | None
     page_url: str
     download_url: str | None
+    downloads: dict[str, str] = field(default_factory=dict)
     similar: list[str] = field(default_factory=list)
     score: float = 0.0
+
+    @property
+    def has_direct_downloads(self) -> bool:
+        return bool(self.downloads)
 
 
 @dataclass(slots=True)

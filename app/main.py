@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.db.session import create_schema
 from app.services.ai import AIConsultant
 from app.services.generator import MaterialGenerator
+from app.services.image_similarity import ImageMaterialAnalyzer
 from app.services.material_search import MaterialSearchService
 from app.services.stats import StatsService
 from app.sources.ambientcg import AmbientCGSource
@@ -44,6 +45,7 @@ def build_application() -> Application:
     ]
     search_service = MaterialSearchService(sources=sources, consultant=consultant)
     generator = MaterialGenerator(consultant=consultant)
+    image_analyzer = ImageMaterialAnalyzer()
     stats = StatsService()
 
     application = (
@@ -58,6 +60,7 @@ def build_application() -> Application:
             "consultant": consultant,
             "search_service": search_service,
             "generator": generator,
+            "image_analyzer": image_analyzer,
             "stats": stats,
         }
     )
