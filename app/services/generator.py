@@ -25,7 +25,7 @@ class MaterialGenerator:
 
         seed = abs(hash((prompt, user_id))) % (2**32)
         random.seed(seed)
-        albedo = await self._albedo(prompt)
+        albedo, used_ai_image = await self._albedo(prompt)
         roughness = self._roughness(albedo)
         height = self._height(albedo)
         normal = self._normal_from_height(height)
@@ -50,18 +50,18 @@ class MaterialGenerator:
                 zf.write(path, arcname=f"{name}.png")
 
         maps["zip"] = str(archive)
-        notes = self._notes()
+        notes = self._notes(used_ai_image)
         return GeneratedMaterialPackage(prompt=prompt, directory=str(output_dir), maps=maps, notes=notes)
 
-    def _notes(self) -> str:
-        if settings.ai_image_api_url and settings.ai_image_api_key:
+    def _notes(self, used_ai_image: bool) -> str:
+        if used_ai_image:
             return (
                 "Generated with your connected AI image API, then converted into starter PBR maps. "
                 "For production renders, inspect tileability and tune normal/displacement strength."
             )
         return (
-            "Generated local procedural PBR starter maps from your prompt. To use real AI images, connect "
-            "AI_IMAGE_API_URL and AI_IMAGE_API_KEY. For production renders, inspect seams and tune scale."
+            "Generated local procedural PBR starter maps from your prompt because the external AI image API "
+            "was unavailable or not configured. For production renders, inspect seams and tune scale."
         )
 
     def _palette(self, prompt: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -79,11 +79,11 @@ class MaterialGenerator:
         accent = (196, 151, 61) if "gold" in lowered else tuple(min(255, channel + 35) for channel in base)
         return base, accent
 
-    async def _albedo(self, prompt: str, size: int = 1024) -> Image.Image:
+    async def _albedo(self, prompt: str, size: int = 1024) -> tuple[Image.Image, bool]:
         ai_image = await self._try_ai_image(prompt, size)
         if ai_image:
-            return ai_image
-        return self._procedural_albedo(prompt, size)
+            return ai_image, True
+        return self._procedural_albedo(prompt, size), False
 
     async def _try_ai_image(self, prompt: str, size: int) -> Image.Image | None:
         if not settings.ai_image_api_url or not settings.ai_image_api_key:

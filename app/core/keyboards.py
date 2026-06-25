@@ -35,12 +35,17 @@ CHANNEL_KEYBOARD = InlineKeyboardMarkup(
 )
 
 
-def result_keyboard(material_id: str, download_url: str | None, has_direct_downloads: bool = False) -> InlineKeyboardMarkup:
+def result_keyboard(material_id: str, has_preview: bool = False, has_direct_downloads: bool = False) -> InlineKeyboardMarkup:
     buttons = []
+    download_row = []
+    if has_preview:
+        download_row.append(InlineKeyboardButton("JPG Preview", callback_data=f"preview:{material_id}"))
     if has_direct_downloads:
-        buttons.append([InlineKeyboardButton("Download PBR Maps", callback_data=f"dlopts:{material_id}")])
-    elif download_url:
-        buttons.append([InlineKeyboardButton("Open Download Page", url=download_url)])
+        download_row.append(InlineKeyboardButton("PBR / ZIP Package", callback_data=f"dlopts:{material_id}"))
+    if download_row:
+        buttons.append(download_row)
+    else:
+        buttons.append([InlineKeyboardButton("No Direct Files", callback_data=f"nodl:{material_id}")])
     buttons.append(
         [
             InlineKeyboardButton("Find Similar", callback_data=f"more:{material_id}"),
@@ -55,5 +60,21 @@ def download_quality_keyboard(material_id: str, downloads: dict[str, str]) -> In
     order = {"1K": 1, "2K": 2, "4K": 4, "8K": 8, "SOURCE": 99}
     rows = []
     for quality in sorted(downloads.keys(), key=lambda item: order.get(item, 100)):
-        rows.append([InlineKeyboardButton(f"{quality} ZIP", callback_data=f"dl:{material_id}:{quality}")])
+        rows.append([InlineKeyboardButton(f"{quality}", callback_data=f"dlquality:{material_id}:{quality}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def download_file_type_keyboard(material_id: str, quality: str, files: dict[str, str]) -> InlineKeyboardMarkup:
+    labels = {
+        "diffuse": "Diffuse Map",
+        "normal": "Normal Map",
+        "roughness": "Roughness Map",
+        "displacement": "Displacement Map",
+        "ao": "Ambient Occlusion",
+        "zip": "PBR ZIP Package",
+    }
+    rows = []
+    for key in ["diffuse", "normal", "roughness", "displacement", "ao", "zip"]:
+        if key in files:
+            rows.append([InlineKeyboardButton(labels[key], callback_data=f"dlfile:{material_id}:{quality}:{key}")])
     return InlineKeyboardMarkup(rows)

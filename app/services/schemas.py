@@ -37,6 +37,7 @@ class MaterialResult:
     page_url: str
     download_url: str | None
     downloads: dict[str, str] = field(default_factory=dict)
+    map_downloads: dict[str, dict[str, str]] = field(default_factory=dict)
     similar: list[str] = field(default_factory=list)
     score: float = 0.0
 

@@ -33,7 +33,7 @@ class Repository:
             category=material.category,
             source=material.source,
             preview_url=material.preview_url,
-            download_url=material.download_url or material.page_url,
+            download_url=None,
         )
         statement = statement.on_conflict_do_nothing(index_elements=["user_id", "material_key"])
         result = await self.session.execute(statement)

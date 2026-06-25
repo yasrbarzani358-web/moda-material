@@ -15,7 +15,14 @@ from telegram.ext import (
 )
 
 from app.core.config import settings
-from app.core.keyboards import CHANNEL_KEYBOARD, MAIN_MENU, USAGE_MENU, download_quality_keyboard, result_keyboard
+from app.core.keyboards import (
+    CHANNEL_KEYBOARD,
+    MAIN_MENU,
+    USAGE_MENU,
+    download_file_type_keyboard,
+    download_quality_keyboard,
+    result_keyboard,
+)
 from app.db.session import SessionLocal
 from app.services.downloader import DownloadTooLargeError, MaterialDownloader
 from app.services.generator import MaterialGenerator
@@ -180,11 +187,24 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await more_like_this(update, context, data.split(":", 1)[1])
     elif data.startswith("variant:"):
         await variant_prompt(update, context, data.split(":", 1)[1])
+    elif data.startswith("preview:"):
+        await send_material_preview(update, context, data.split(":", 1)[1])
     elif data.startswith("dlopts:"):
         await show_download_options(update, context, data.split(":", 1)[1])
+    elif data.startswith("dlquality:"):
+        _, material_id, quality = data.split(":", 2)
+        await show_file_type_options(update, context, material_id, quality)
+    elif data.startswith("dlfile:"):
+        _, material_id, quality, file_type = data.split(":", 3)
+        await send_material_file(update, context, material_id, quality, file_type)
     elif data.startswith("dl:"):
         _, material_id, quality = data.split(":", 2)
         await send_material_download(update, context, material_id, quality)
+    elif data.startswith("nodl:"):
+        await update.effective_message.reply_text(
+            "This source did not provide a direct bot-downloadable file for that material. "
+            "Try Find Similar or Generate Variant."
+        )
 
 
 async def handle_usage(update: Update, context: ContextTypes.DEFAULT_TYPE, usage: str) -> None:
@@ -268,14 +288,17 @@ async def _send_material_card(
     material: MaterialResult,
 ) -> None:
     short_id = search_service.short_id(material.key)
+    match_percent = min(99, max(1, int(round(material.score * 100))))
     caption = (
         f"*{_escape(material.name)}*\n"
+        f"Match: {_escape(str(match_percent))}%\n"
         f"Source: {_escape(material.source)}\n"
         f"Category: {_escape(material.category)}\n"
         f"Recommended usage: {_escape(', '.join(material.recommended_usage))}\n"
-        f"Resolution: {_escape(material.resolution or 'varies')}"
+        f"Resolution: {_escape(material.resolution or 'varies')}\n"
+        f"Files: {_escape('Preview + PBR ZIP' if material.has_direct_downloads else 'Preview only')}"
     )
-    keyboard = result_keyboard(short_id, material.download_url or material.page_url, material.has_direct_downloads)
+    keyboard = result_keyboard(short_id, bool(material.preview_url), material.has_direct_downloads)
     if material.preview_url:
         try:
             downloader: MaterialDownloader = context.application.bot_data["downloader"]
@@ -299,9 +322,53 @@ async def show_download_options(update: Update, context: ContextTypes.DEFAULT_TY
         await update.effective_message.reply_text("No direct ZIP downloads are available for this material.")
         return
     await update.effective_message.reply_text(
-        f"Choose download quality for {material.name}:",
+        f"Choose quality for {material.name}:",
         reply_markup=download_quality_keyboard(material_id, material.downloads),
     )
+
+
+async def show_file_type_options(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    material_id: str,
+    quality: str,
+) -> None:
+    search_service: MaterialSearchService = context.application.bot_data["search_service"]
+    material = search_service.get_cached(material_id)
+    if not material:
+        await update.effective_message.reply_text("That result expired. Search again and download from the new card.")
+        return
+    files = material.map_downloads.get(quality) or {}
+    if not files:
+        await send_material_download(update, context, material_id, quality)
+        return
+    await update.effective_message.reply_text(
+        f"{material.name}\nQuality: {quality}\nChoose the file to receive inside Telegram:",
+        reply_markup=download_file_type_keyboard(material_id, quality, files),
+    )
+
+
+async def send_material_preview(update: Update, context: ContextTypes.DEFAULT_TYPE, material_id: str) -> None:
+    search_service: MaterialSearchService = context.application.bot_data["search_service"]
+    material = search_service.get_cached(material_id)
+    if not material or not material.preview_url:
+        await update.effective_message.reply_text("Preview file is not available for this material.")
+        return
+
+    message = update.effective_message
+    await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
+    downloader: MaterialDownloader = context.application.bot_data["downloader"]
+    filename = f"{material.name.replace(' ', '_')}_preview.jpg"
+    try:
+        preview_path = await downloader.fetch_preview(material.preview_url, filename)
+        await message.reply_document(
+            document=InputFile(preview_path),
+            filename=preview_path.name,
+            caption=f"{material.name}\nPreview JPG",
+        )
+    except Exception:
+        LOGGER.exception("Preview download failed for %s", material.key)
+        await message.reply_text("I could not fetch the preview file right now. Try Find Similar.")
 
 
 async def send_material_download(
@@ -334,20 +401,55 @@ async def send_material_download(
     except DownloadTooLargeError:
         await message.reply_text(
             f"This {quality} ZIP is too large for the free bot server to upload directly. "
-            "Try 1K or 2K, or use the source download page."
+            "Try 1K or 2K."
         )
     except TelegramError:
         LOGGER.exception("Telegram upload failed for %s", material.key)
         await message.reply_text(
-            "Telegram could not upload this ZIP directly. "
-            f"Try a lower quality, or use this direct link:\n{download_url}"
+            "Telegram could not upload this ZIP directly. Try a lower quality."
         )
     except Exception:
         LOGGER.exception("Download failed for %s", material.key)
         await message.reply_text(
-            "I could not fetch this material ZIP from the source right now. "
-            f"Use this direct download link:\n{download_url}"
+            "I could not fetch this material ZIP from the source right now. Try another quality or Find Similar."
         )
+
+
+async def send_material_file(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    material_id: str,
+    quality: str,
+    file_type: str,
+) -> None:
+    search_service: MaterialSearchService = context.application.bot_data["search_service"]
+    material = search_service.get_cached(material_id)
+    if not material:
+        await update.effective_message.reply_text("That result expired. Search again and download from the new card.")
+        return
+    files = material.map_downloads.get(quality) or {}
+    file_url = files.get(file_type)
+    if not file_url:
+        await update.effective_message.reply_text("That file is not available for this material.")
+        return
+
+    extension = "zip" if file_type == "zip" else "jpg"
+    filename = f"{material.name.replace(' ', '_')}_{quality}_{file_type}.{extension}"
+    message = update.effective_message
+    await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
+    downloader: MaterialDownloader = context.application.bot_data["downloader"]
+    try:
+        local_file = await downloader.fetch_file(file_url, filename, max_mb=settings.max_bot_download_mb)
+        await message.reply_document(
+            document=InputFile(local_file),
+            filename=local_file.name,
+            caption=f"{material.name}\nQuality: {quality}\nFile: {file_type.replace('_', ' ').title()}",
+        )
+    except DownloadTooLargeError:
+        await message.reply_text(f"This {quality} file is too large to upload directly. Try 1K or 2K.")
+    except Exception:
+        LOGGER.exception("Material file download failed for %s", material.key)
+        await message.reply_text("I could not fetch this file right now. Try another file type or quality.")
 
 
 async def save_material(update: Update, context: ContextTypes.DEFAULT_TYPE, material_id: str) -> None:
@@ -375,8 +477,7 @@ async def favorites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     lines = ["Your saved materials:"]
     for item in items:
-        url = item.download_url or "#"
-        lines.append(f"- {item.material_name} ({item.source})\n{url}")
+        lines.append(f"- {item.material_name} ({item.source})")
     await update.effective_message.reply_text("\n\n".join(lines))
 
 

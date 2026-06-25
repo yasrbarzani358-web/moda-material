@@ -25,6 +25,17 @@ class AmbientCGSource(MaterialSource):
                 quality: f"https://ambientcg.com/get?file={asset_id}_{quality}-JPG.zip"
                 for quality in ["1K", "2K", "4K", "8K"]
             }
+            map_downloads = {
+                quality: {
+                    "diffuse": f"https://ambientcg.com/get?file={asset_id}_{quality}-JPG_Color.jpg",
+                    "normal": f"https://ambientcg.com/get?file={asset_id}_{quality}-JPG_NormalGL.jpg",
+                    "roughness": f"https://ambientcg.com/get?file={asset_id}_{quality}-JPG_Roughness.jpg",
+                    "displacement": f"https://ambientcg.com/get?file={asset_id}_{quality}-JPG_Displacement.jpg",
+                    "ao": f"https://ambientcg.com/get?file={asset_id}_{quality}-JPG_AmbientOcclusion.jpg",
+                    "zip": downloads[quality],
+                }
+                for quality in ["1K", "2K", "4K", "8K"]
+            }
             results.append(
                 MaterialResult(
                     key=f"ambientcg:{asset_id}",
@@ -37,6 +48,7 @@ class AmbientCGSource(MaterialSource):
                     page_url=page_url,
                     download_url=page_url,
                     downloads=downloads,
+                    map_downloads=map_downloads,
                     similar=[],
                     score=1.0,
                 )
